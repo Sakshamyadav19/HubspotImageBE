@@ -8,6 +8,26 @@
   ],
   "routes": [
     {
+      "src": "/",
+      "dest": "app.py"
+    },
+    {
+      "src": "/upload",
+      "dest": "app.py"
+    },
+    {
+      "src": "/download-images",
+      "dest": "app.py"
+    },
+    {
+      "src": "/health",
+      "dest": "app.py"
+    },
+    {
+      "src": "/test",
+      "dest": "app.py"
+    },
+    {
       "src": "/(.*)",
       "dest": "app.py"
     }
