@@ -5,7 +5,20 @@ import os
 import io
 import csv
 import json
+import requests
+import urllib.parse
+import base64
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Get access token from environment variable
+ACCESS_TOKEN = os.getenv('HUBSPOT_ACCESS_TOKEN')
+
+if not ACCESS_TOKEN:
+    print("⚠️  WARNING: HUBSPOT_ACCESS_TOKEN is not set!")
 
 app = Flask(__name__)
 
@@ -21,6 +34,67 @@ def add_cors_headers(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     return response
+
+def get_file_id_from_url(signed_url):
+    """Extract file ID from HubSpot signed URL"""
+    parsed = urllib.parse.urlparse(signed_url)
+    parts = parsed.path.strip("/").split("/")
+    if "signed-url-redirect" in parts:
+        try:
+            idx = parts.index("signed-url-redirect")
+            return parts[idx + 1]
+        except IndexError:
+            return None
+    return None
+
+def get_extension_from_url(url):
+    """Get file extension from URL"""
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path
+    ext = os.path.splitext(path)[-1].lstrip('.')
+    return ext if ext else "jpg"
+
+def download_file_from_hubspot(signed_url):
+    """Download file and return base64 encoded data with metadata"""
+    if not ACCESS_TOKEN:
+        return None
+        
+    file_id = get_file_id_from_url(signed_url)
+    if not file_id:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}"
+    }
+
+    try:
+        # Get signed URL
+        api_url = f"https://api.hubapi.com/files/v3/files/{file_id}/signed-url"
+        response = requests.get(api_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return None
+
+        signed_download_url = response.json().get("url")
+        if not signed_download_url:
+            return None
+
+        # Download image
+        img_response = requests.get(signed_download_url, timeout=30)
+        if img_response.status_code == 200:
+            # Convert to base64
+            image_data = base64.b64encode(img_response.content).decode('utf-8')
+            extension = get_extension_from_url(signed_url)
+            
+            return {
+                'data': image_data,
+                'extension': extension,
+                'size': len(img_response.content)
+            }
+        else:
+            return None
+    except Exception as e:
+        print(f"❌ Error downloading file_id {file_id}: {e}")
+        return None
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -186,14 +260,93 @@ def download_images():
             })
             return add_cors_headers(response), 400
 
-        # For now, return success response (actual download logic will be added later)
-        response = jsonify({
-            'success': True,
-            'message': f'{total_urls} image URLs found in {len(selected_columns)} columns. Images would be downloaded to Downloads/hubspot-images/',
-            'total_images': total_urls,
-            'download_path': 'Downloads/hubspot-images/'
-        })
-        return add_cors_headers(response)
+        # Handle default downloads folder
+        if download_path == 'downloads':
+            # Use the user's default downloads folder
+            downloads_path = os.path.expanduser('~/Downloads')
+            download_path = os.path.join(downloads_path, 'hubspot-images')
+        else:
+            # Use the provided path
+            if not download_path:
+                response = jsonify({'error': 'Download path is required'})
+                return add_cors_headers(response), 400
+
+        # Create download directory if it doesn't exist
+        try:
+            os.makedirs(download_path, exist_ok=True)
+        except Exception as e:
+            response = jsonify({'error': f'Cannot create download directory: {str(e)}'})
+            return add_cors_headers(response), 400
+
+        successful_downloads = []
+        errors = []
+
+        for col in selected_columns:
+            if col not in columns:
+                errors.append(f"Column '{col}' not found in file")
+                continue
+                
+            # Create column directory inside the main download folder
+            column_dir = os.path.join(download_path, secure_filename(col))
+            try:
+                os.makedirs(column_dir, exist_ok=True)
+            except Exception as e:
+                errors.append(f"Cannot create directory for column '{col}': {str(e)}")
+                continue
+            
+            col_index = columns.index(col)
+            count = 0
+            
+            for row in rows[1:]:  # Skip header row
+                try:
+                    if len(row) <= col_index or not row[col_index].strip():
+                        continue
+                        
+                    signed_url = row[col_index].strip()
+                    count += 1
+                    
+                    # Download image data
+                    image_info = download_file_from_hubspot(signed_url)
+                    if image_info:
+                        filename = f"{secure_filename(col)}_{str(count).zfill(3)}.{image_info['extension']}"
+                        file_path = os.path.join(column_dir, filename)
+                        
+                        # Save image to file
+                        try:
+                            with open(file_path, 'wb') as f:
+                                f.write(base64.b64decode(image_info['data']))
+                            successful_downloads.append({
+                                'column': col,
+                                'filename': filename,
+                                'path': file_path,
+                                'size': image_info['size']
+                            })
+                        except Exception as e:
+                            errors.append(f"Failed to save {filename}: {str(e)}")
+                            count -= 1
+                    else:
+                        count -= 1  # rollback if failed
+                        errors.append(f"Failed to download from {signed_url}")
+                except Exception as e:
+                    errors.append(f"Error processing {signed_url}: {str(e)}")
+                    count -= 1
+
+        if successful_downloads:
+            response = jsonify({
+                'success': True,
+                'message': f'{len(successful_downloads)} images downloaded successfully to Downloads/hubspot-images/',
+                'total_images': len(successful_downloads),
+                'download_path': download_path,
+                'errors': errors[:10]  # Limit errors shown
+            })
+            return add_cors_headers(response)
+        else:
+            response = jsonify({
+                'success': False,
+                'error': 'Please try different columns.',
+                'total_images': 0
+            })
+            return add_cors_headers(response), 400
 
     except Exception as e:
         response = jsonify({'error': f'Download failed: {str(e)}'})
