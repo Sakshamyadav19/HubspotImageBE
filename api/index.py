@@ -435,6 +435,7 @@ def get_images():
         response = jsonify({'error': f'Failed to get images: {str(e)}'})
         return add_cors_headers(response), 500
 
-# For Vercel serverless
+# For Render deployment
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

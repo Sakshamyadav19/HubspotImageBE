@@ -1,37 +1,32 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
 import io
-import pandas as pd
+import csv
+import json
 import requests
 import urllib.parse
-from dotenv import load_dotenv
 import base64
-import json
 from datetime import datetime
+from dotenv import load_dotenv
 
-# For Vercel serverless deployment
-from flask import Flask, request, jsonify
-import sys
-import traceback
-
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 # Get access token from environment variable
 ACCESS_TOKEN = os.getenv('HUBSPOT_ACCESS_TOKEN')
 
 if not ACCESS_TOKEN:
-    raise ValueError("HUBSPOT_ACCESS_TOKEN environment variable is required. Please check your .env file.")
+    print("⚠️  WARNING: HUBSPOT_ACCESS_TOKEN is not set!")
 
 app = Flask(__name__)
 
-# Configure Flask from environment variables
-app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_CONTENT_LENGTH', 16777216))  # 16MB default
-
 # Store uploaded files in memory (in production, use a proper file storage system)
 uploaded_files = {}
+
+# CORS configuration
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 def add_cors_headers(response):
     """Add CORS headers to response"""
@@ -40,13 +35,8 @@ def add_cors_headers(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     return response
 
-# Fix CORS configuration - More permissive for development
-CORS(app, 
-     resources={r"/*": {"origins": "*"}},
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "OPTIONS"])
-
 def get_file_id_from_url(signed_url):
+    """Extract file ID from HubSpot signed URL"""
     parsed = urllib.parse.urlparse(signed_url)
     parts = parsed.path.strip("/").split("/")
     if "signed-url-redirect" in parts:
@@ -58,6 +48,7 @@ def get_file_id_from_url(signed_url):
     return None
 
 def get_extension_from_url(url):
+    """Get file extension from URL"""
     parsed = urllib.parse.urlparse(url)
     path = parsed.path
     ext = os.path.splitext(path)[-1].lstrip('.')
@@ -65,6 +56,9 @@ def get_extension_from_url(url):
 
 def download_file_from_hubspot(signed_url):
     """Download file and return base64 encoded data with metadata"""
+    if not ACCESS_TOKEN:
+        return None
+        
     file_id = get_file_id_from_url(signed_url)
     if not file_id:
         return None
@@ -102,20 +96,83 @@ def download_file_from_hubspot(signed_url):
         print(f"❌ Error downloading file_id {file_id}: {e}")
         return None
 
-@app.route('/upload', methods=['POST', 'OPTIONS'])
-def upload_file():
-    # Handle preflight OPTIONS request
+@app.route('/health', methods=['GET'])
+def health_check():
+    response = jsonify({'status': 'healthy', 'message': 'HubSpot Image Downloader API is running'})
+    return add_cors_headers(response)
+
+@app.route('/test', methods=['GET'])
+def test():
+    response = jsonify({'message': 'Backend is working!', 'timestamp': datetime.now().isoformat()})
+    return add_cors_headers(response)
+
+@app.route('/test-download', methods=['GET'])
+def test_download():
+    """Test endpoint to verify download functionality"""
+    try:
+        # Create a simple test image (1x1 pixel PNG)
+        test_image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+        
+        response = jsonify({
+            'success': True,
+            'images': [{
+                'column': 'test',
+                'filename': 'test_image.png',
+                'data': test_image_data,
+                'extension': 'png',
+                'size': 95
+            }]
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        response = jsonify({'error': f'Test failed: {str(e)}'})
+        return add_cors_headers(response), 500
+
+@app.route('/test-upload', methods=['POST', 'OPTIONS'])
+def test_upload():
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        return response
+        return add_cors_headers(response)
     
     try:
+        response = jsonify({
+            'message': 'Test upload endpoint working',
+            'content_type': request.content_type,
+            'has_files': 'file' in request.files,
+            'timestamp': datetime.now().isoformat()
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        response = jsonify({'error': f'Test failed: {str(e)}'})
+        return add_cors_headers(response), 500
+
+@app.route('/', methods=['GET'])
+def root():
+    response = jsonify({
+        'message': 'HubSpot Image Downloader API',
+        'status': 'running',
+        'endpoints': ['/upload', '/download-images', '/health', '/test'],
+        'timestamp': datetime.now().isoformat()
+    })
+    return add_cors_headers(response)
+
+@app.route('/upload', methods=['POST', 'OPTIONS'])
+def upload_file():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        return add_cors_headers(response)
+    
+    try:
+        # Check if this is a file upload or test request
+        if 'file' not in request.files:
+            # This might be a test request, return success
+            response = jsonify({'message': 'Upload endpoint ready for file uploads', 'timestamp': datetime.now().isoformat()})
+            return add_cors_headers(response)
+        
         file = request.files['file']
         if not file:
-            return jsonify({'error': 'No file uploaded'}), 400
+            response = jsonify({'error': 'No file uploaded'})
+            return add_cors_headers(response), 400
 
         filename = secure_filename(file.filename)
         extension = os.path.splitext(filename)[1].lower()
@@ -125,198 +182,137 @@ def upload_file():
         file_stream = io.BytesIO(file_content)
 
         if extension == ".csv":
-            df = pd.read_csv(file_stream)
-        elif extension in [".xls", ".xlsx"]:
-            df = pd.read_excel(file_stream)
+            # Read CSV file and extract columns
+            file_stream.seek(0)
+            csv_reader = csv.reader(file_stream.read().decode('utf-8').splitlines())
+            rows = list(csv_reader)
+            
+            if not rows:
+                response = jsonify({'error': 'Empty CSV file'})
+                return add_cors_headers(response), 400
+                
+            columns = rows[0]  # First row contains column headers
+            
+            # Clean up column names (remove extra whitespace)
+            columns = [col.strip() for col in columns]
+            
+            # Handle case where column names contain commas and got split
+            # If we have more columns than expected, try to reconstruct
+            if len(columns) > 4:  # More than the expected 4 columns
+                # Look for patterns that suggest a column name was split
+                reconstructed_columns = []
+                i = 0
+                while i < len(columns):
+                    if i < len(columns) - 1 and columns[i].endswith('professional') and columns[i+1].startswith('but ideally'):
+                        # This looks like a split column name
+                        reconstructed_columns.append(columns[i] + ', ' + columns[i+1])
+                        i += 2
+                    else:
+                        reconstructed_columns.append(columns[i])
+                        i += 1
+                columns = reconstructed_columns
+            
+            # Store the file data for later use
+            uploaded_files[filename] = {
+                'content': file_content,
+                'extension': extension,
+                'rows': rows,
+                'columns': columns
+            }
         else:
-            return jsonify({'error': 'Unsupported file format'}), 400
+            response = jsonify({'error': 'Only CSV files are supported'})
+            return add_cors_headers(response), 400
 
-        # Store the file data for later use
-        uploaded_files[filename] = {
-            'content': file_content,
-            'extension': extension,
-            'dataframe': df
-        }
-
-        columns = df.columns.tolist()
-        response = jsonify({'columns': columns, 'filename': filename})
+        response = jsonify({
+            'columns': columns,
+            'filename': filename
+        })
         return add_cors_headers(response)
 
     except Exception as e:
-        print(f"Upload error: {e}")
         response = jsonify({'error': f'Upload failed: {str(e)}'})
         return add_cors_headers(response), 500
 
-def generate_images_stream(df, selected_columns):
-    """Generator function to stream images one by one"""
-    count = 0
-    total_count = 0
-    errors = []
-    
-    # Count total images first
-    for col in selected_columns:
-        if col in df.columns:
-            total_count += len(df[col].dropna())
-    
-    yield f"data: {json.dumps({'type': 'start', 'total': total_count})}\n\n"
-    
-    for col in selected_columns:
-        if col not in df.columns:
-            error_msg = f"Column '{col}' not found in file"
-            errors.append(error_msg)
-            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
-            continue
-            
-        for idx, signed_url in df[col].dropna().items():
-            try:
-                if pd.isna(signed_url) or not str(signed_url).strip():
-                    continue
-                    
-                url_str = str(signed_url).strip()
-                count += 1
-                
-                # Send progress update
-                yield f"data: {json.dumps({'type': 'progress', 'current': count, 'total': total_count, 'column': col})}\n\n"
-                
-                # Download image data
-                image_info = download_file_from_hubspot(url_str)
-                if image_info:
-                    filename = f"{secure_filename(col)}_{str(count).zfill(3)}.{image_info['extension']}"
-                    
-                    # Send image data
-                    image_data = {
-                        'type': 'image',
-                        'column': col,
-                        'filename': filename,
-                        'data': image_info['data'],
-                        'size': image_info['size'],
-                        'current': count,
-                        'total': total_count
-                    }
-                    yield f"data: {json.dumps(image_data)}\n\n"
-                else:
-                    count -= 1  # rollback if failed
-                    error_msg = f"Failed to download from {url_str}"
-                    errors.append(error_msg)
-                    yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
-                    
-            except Exception as e:
-                error_msg = f"Error processing {signed_url}: {str(e)}"
-                errors.append(error_msg)
-                yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
-                count -= 1
-    
-    # Send completion message
-    yield f"data: {json.dumps({'type': 'complete', 'total_downloaded': count, 'errors': errors[:10]})}\n\n"
-
-@app.route('/download-images-stream', methods=['POST', 'OPTIONS'])
-def download_images_stream():
-    # Handle preflight OPTIONS request
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        return response
-    
-    try:
-        # Get the file from the request
-        file = request.files.get('file')
-        if not file:
-            return jsonify({'error': 'No file provided'}), 400
-
-        # Get form data
-        columns_data = request.form.get('columns')
-        if not columns_data:
-            return jsonify({'error': 'Missing required parameters'}), 400
-
-        # Parse selected columns
-        try:
-            selected_columns = json.loads(columns_data) if isinstance(columns_data, str) else columns_data
-        except:
-            return jsonify({'error': 'Invalid columns format'}), 400
-
-        # Process file in memory
-        ext = os.path.splitext(file.filename)[1].lower()
-        file_stream = io.BytesIO(file.read())
-        
-        if ext == ".csv":
-            df = pd.read_csv(file_stream)
-        elif ext in [".xls", ".xlsx"]:
-            df = pd.read_excel(file_stream)
-        else:
-            return jsonify({'error': 'Unsupported file format'}), 400
-
-        # Return Server-Sent Events stream
-        return Response(
-            generate_images_stream(df, selected_columns),
-            mimetype='text/event-stream',
-            headers={
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'Access-Control-Allow-Origin': 'http://localhost:3000',
-                'Access-Control-Allow-Credentials': 'true'
-            }
-        )
-
-    except Exception as e:
-        print(f"Download stream error: {e}")
-        return jsonify({'error': f'Download failed: {str(e)}'}), 500
-
-# Keep the original endpoint for backward compatibility
 @app.route('/download-images', methods=['POST', 'OPTIONS'])
 def download_images():
-    # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        return response
+        return add_cors_headers(response)
     
     try:
         # Get JSON data from request
         data = request.get_json()
         
         if not data:
-            return jsonify({'error': 'No data provided'}), 400
+            response = jsonify({'error': 'No data provided'})
+            return add_cors_headers(response), 400
 
         filename = data.get('filename')
         selected_columns = data.get('columns', [])
         download_path = data.get('downloadPath', '')
 
         if not filename or not selected_columns:
-            return jsonify({'error': 'Missing required parameters'}), 400
+            response = jsonify({'error': 'Missing required parameters'})
+            return add_cors_headers(response), 400
 
+        # Get the stored file data
+        if filename not in uploaded_files:
+            response = jsonify({'error': 'File not found. Please upload the file again.'})
+            return add_cors_headers(response), 400
+
+        print(f"Processing download for file: {filename}")
+        print(f"Selected columns: {selected_columns}")
+        print(f"Available files in memory: {list(uploaded_files.keys())}")
+
+        file_data = uploaded_files[filename]
+        rows = file_data['rows']
+        columns = file_data['columns']
+
+        # Count total URLs in selected columns
+        total_urls = 0
+        for col in selected_columns:
+            if col in columns:
+                col_index = columns.index(col)
+                # Count non-empty values in the column (skip header row)
+                for row in rows[1:]:  # Skip header row
+                    if len(row) > col_index and row[col_index].strip():
+                        total_urls += 1
+
+        if total_urls == 0:
+            response = jsonify({
+                'success': False,
+                'error': 'Please try different columns.',
+                'total_images': 0
+            })
+            return add_cors_headers(response), 400
+
+        # On Render, we can save files to disk
         # Handle default downloads folder
         if download_path == 'downloads':
-            # Use the user's default downloads folder
-            downloads_path = os.path.expanduser('~/Downloads')
-            download_path = os.path.join(downloads_path, 'hubspot-images')
+            # Use a downloads folder in the app directory
+            download_path = os.path.join(os.getcwd(), 'downloads', 'hubspot-images')
         else:
             # Use the provided path
             if not download_path:
-                return jsonify({'error': 'Download path is required'}), 400
+                response = jsonify({'error': 'Download path is required'})
+                return add_cors_headers(response), 400
 
         # Create download directory if it doesn't exist
         try:
             os.makedirs(download_path, exist_ok=True)
         except Exception as e:
-            return jsonify({'error': f'Cannot create download directory: {str(e)}'}), 400
+            response = jsonify({'error': f'Cannot create download directory: {str(e)}'})
+            return add_cors_headers(response), 400
 
-        # Get the stored file data
-        if filename not in uploaded_files:
-            return jsonify({'error': 'File not found. Please upload the file again.'}), 400
-
-        file_data = uploaded_files[filename]
-        df = file_data['dataframe']
-
-        count = 0
         successful_downloads = []
         errors = []
 
+        print(f"Starting image download process...")
+        print(f"Total rows to process: {len(rows) - 1}")  # Exclude header
+        print(f"Download path: {download_path}")
+
         for col in selected_columns:
-            if col not in df.columns:
+            if col not in columns:
                 errors.append(f"Column '{col}' not found in file")
                 continue
                 
@@ -328,18 +324,23 @@ def download_images():
                 errors.append(f"Cannot create directory for column '{col}': {str(e)}")
                 continue
             
-            for idx, signed_url in df[col].dropna().items():
+            col_index = columns.index(col)
+            count = 0
+            
+            print(f"Processing column: {col} (index: {col_index})")
+            
+            for i, row in enumerate(rows[1:], 1):  # Skip header row
                 try:
-                    if pd.isna(signed_url) or not str(signed_url).strip():
+                    if len(row) <= col_index or not row[col_index].strip():
                         continue
                         
-                    url_str = str(signed_url).strip()
-                    count += 1
+                    signed_url = row[col_index].strip()
+                    print(f"Processing row {i}: {signed_url[:50]}...")
                     
                     # Download image data
-                    image_info = download_file_from_hubspot(url_str)
+                    image_info = download_file_from_hubspot(signed_url)
                     if image_info:
-                        filename = f"{secure_filename(col)}_{str(count).zfill(3)}.{image_info['extension']}"
+                        filename = f"{secure_filename(col)}_{str(count + 1).zfill(3)}.{image_info['extension']}"
                         file_path = os.path.join(column_dir, filename)
                         
                         # Save image to file
@@ -352,20 +353,24 @@ def download_images():
                                 'path': file_path,
                                 'size': image_info['size']
                             })
+                            count += 1
+                            print(f"Successfully downloaded: {filename}")
                         except Exception as e:
                             errors.append(f"Failed to save {filename}: {str(e)}")
-                            count -= 1
+                            print(f"Failed to save {filename}: {str(e)}")
                     else:
-                        count -= 1  # rollback if failed
-                        errors.append(f"Failed to download from {url_str}")
+                        errors.append(f"Failed to download from {signed_url[:50]}...")
+                        print(f"Failed to download from row {i}")
                 except Exception as e:
-                    errors.append(f"Error processing {signed_url}: {str(e)}")
-                    count -= 1
+                    errors.append(f"Error processing row {i}: {str(e)}")
+                    print(f"Error processing row {i}: {str(e)}")
+
+        print(f"Download process complete. Successful: {len(successful_downloads)}, Errors: {len(errors)}")
 
         if successful_downloads:
             response = jsonify({
                 'success': True,
-                'message': f'{len(successful_downloads)} images downloaded successfully to Downloads/hubspot-images/',
+                'message': f'{len(successful_downloads)} images downloaded successfully to {download_path}!',
                 'total_images': len(successful_downloads),
                 'download_path': download_path,
                 'errors': errors[:10]  # Limit errors shown
@@ -380,39 +385,12 @@ def download_images():
             return add_cors_headers(response), 400
 
     except Exception as e:
-        print(f"Download error: {e}")
         response = jsonify({'error': f'Download failed: {str(e)}'})
         return add_cors_headers(response), 500
 
-# Add a health check endpoint
-@app.route('/health', methods=['GET'])
-def health_check():
-    response = jsonify({'status': 'healthy', 'message': 'HubSpot Image Downloader API is running'})
-    return add_cors_headers(response)
 
-# Add a test endpoint
-@app.route('/test', methods=['GET'])
-def test():
-    response = jsonify({'message': 'Backend is working!', 'timestamp': datetime.now().isoformat()})
-    return add_cors_headers(response)
 
-# Add root endpoint
-@app.route('/', methods=['GET'])
-def root():
-    response = jsonify({
-        'message': 'HubSpot Image Downloader API',
-        'status': 'running',
-        'endpoints': ['/upload', '/download-images', '/health', '/test'],
-        'timestamp': datetime.now().isoformat()
-    })
-    return add_cors_headers(response)
-
+# For Render deployment
 if __name__ == '__main__':
-    # Validate environment setup
-    if not ACCESS_TOKEN:
-        print("❌ ERROR: HUBSPOT_ACCESS_TOKEN is not set!")
-
-    print("🔐 Environment variables loaded successfully")
-    
-    debug_mode = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
-    app.run(host='127.0.0.1', port=5000, debug=debug_mode)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
