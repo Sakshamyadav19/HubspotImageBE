@@ -97,6 +97,25 @@ def upload_file():
                 
             columns = rows[0]  # First row contains column headers
             
+            # Clean up column names (remove extra whitespace)
+            columns = [col.strip() for col in columns]
+            
+            # Handle case where column names contain commas and got split
+            # If we have more columns than expected, try to reconstruct
+            if len(columns) > 4:  # More than the expected 4 columns
+                # Look for patterns that suggest a column name was split
+                reconstructed_columns = []
+                i = 0
+                while i < len(columns):
+                    if i < len(columns) - 1 and columns[i].endswith('professional') and columns[i+1].startswith('but ideally'):
+                        # This looks like a split column name
+                        reconstructed_columns.append(columns[i] + ', ' + columns[i+1])
+                        i += 2
+                    else:
+                        reconstructed_columns.append(columns[i])
+                        i += 1
+                columns = reconstructed_columns
+            
             # Store the file data for later use
             uploaded_files[filename] = {
                 'content': file_content,
