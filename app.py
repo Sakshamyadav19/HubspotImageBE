@@ -30,7 +30,7 @@ uploaded_files = {}
 
 # Fix CORS configuration
 CORS(app, 
-     resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
+     resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "https://hubspot-image-fe.vercel.app"]}},
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "OPTIONS"])
 
@@ -95,7 +95,7 @@ def upload_file():
     # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         return response
@@ -127,11 +127,15 @@ def upload_file():
         }
 
         columns = df.columns.tolist()
-        return jsonify({'columns': columns, 'filename': filename})
+        response = jsonify({'columns': columns, 'filename': filename})
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+        return response
 
     except Exception as e:
         print(f"Upload error: {e}")
-        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+        response = jsonify({'error': f'Upload failed: {str(e)}'})
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+        return response, 500
 
 def generate_images_stream(df, selected_columns):
     """Generator function to stream images one by one"""
@@ -200,7 +204,7 @@ def download_images_stream():
     # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         return response
@@ -255,7 +259,7 @@ def download_images():
     # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         return response
@@ -349,28 +353,36 @@ def download_images():
                     count -= 1
 
         if successful_downloads:
-            return jsonify({
+            response = jsonify({
                 'success': True,
                 'message': f'{len(successful_downloads)} images downloaded successfully to Downloads/hubspot-images/',
                 'total_images': len(successful_downloads),
                 'download_path': download_path,
                 'errors': errors[:10]  # Limit errors shown
             })
+            response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+            return response
         else:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': 'Please try different columns.',
                 'total_images': 0
-            }), 400
+            })
+            response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+            return response, 400
 
     except Exception as e:
         print(f"Download error: {e}")
-        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+        response = jsonify({'error': f'Download failed: {str(e)}'})
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+        return response, 500
 
 # Add a health check endpoint
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'healthy', 'message': 'HubSpot Image Downloader API is running'})
+    response = jsonify({'status': 'healthy', 'message': 'HubSpot Image Downloader API is running'})
+    response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+    return response
 
 if __name__ == '__main__':
     # Validate environment setup
