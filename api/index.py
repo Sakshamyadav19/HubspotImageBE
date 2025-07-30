@@ -260,38 +260,14 @@ def download_images():
             })
             return add_cors_headers(response), 400
 
-        # Handle default downloads folder
-        if download_path == 'downloads':
-            # Use the user's default downloads folder
-            downloads_path = os.path.expanduser('~/Downloads')
-            download_path = os.path.join(downloads_path, 'hubspot-images')
-        else:
-            # Use the provided path
-            if not download_path:
-                response = jsonify({'error': 'Download path is required'})
-                return add_cors_headers(response), 400
-
-        # Create download directory if it doesn't exist
-        try:
-            os.makedirs(download_path, exist_ok=True)
-        except Exception as e:
-            response = jsonify({'error': f'Cannot create download directory: {str(e)}'})
-            return add_cors_headers(response), 400
-
+        # In serverless environment, we can't save files to disk
+        # Instead, we'll return the images as base64 data for frontend to download
         successful_downloads = []
         errors = []
 
         for col in selected_columns:
             if col not in columns:
                 errors.append(f"Column '{col}' not found in file")
-                continue
-                
-            # Create column directory inside the main download folder
-            column_dir = os.path.join(download_path, secure_filename(col))
-            try:
-                os.makedirs(column_dir, exist_ok=True)
-            except Exception as e:
-                errors.append(f"Cannot create directory for column '{col}': {str(e)}")
                 continue
             
             col_index = columns.index(col)
@@ -309,21 +285,14 @@ def download_images():
                     image_info = download_file_from_hubspot(signed_url)
                     if image_info:
                         filename = f"{secure_filename(col)}_{str(count).zfill(3)}.{image_info['extension']}"
-                        file_path = os.path.join(column_dir, filename)
                         
-                        # Save image to file
-                        try:
-                            with open(file_path, 'wb') as f:
-                                f.write(base64.b64decode(image_info['data']))
-                            successful_downloads.append({
-                                'column': col,
-                                'filename': filename,
-                                'path': file_path,
-                                'size': image_info['size']
-                            })
-                        except Exception as e:
-                            errors.append(f"Failed to save {filename}: {str(e)}")
-                            count -= 1
+                        successful_downloads.append({
+                            'column': col,
+                            'filename': filename,
+                            'data': image_info['data'],  # base64 encoded image data
+                            'extension': image_info['extension'],
+                            'size': image_info['size']
+                        })
                     else:
                         count -= 1  # rollback if failed
                         errors.append(f"Failed to download from {signed_url}")
@@ -334,9 +303,9 @@ def download_images():
         if successful_downloads:
             response = jsonify({
                 'success': True,
-                'message': f'{len(successful_downloads)} images downloaded successfully to Downloads/hubspot-images/',
+                'message': f'{len(successful_downloads)} images downloaded successfully!',
                 'total_images': len(successful_downloads),
-                'download_path': download_path,
+                'images': successful_downloads,  # Include image data for frontend
                 'errors': errors[:10]  # Limit errors shown
             })
             return add_cors_headers(response)
