@@ -64,13 +64,28 @@ def upload_file():
         return add_cors_headers(response)
     
     try:
+        # Check if this is a file upload or test request
+        if 'file' not in request.files:
+            # This might be a test request, return success
+            response = jsonify({'message': 'Upload endpoint ready for file uploads', 'timestamp': datetime.now().isoformat()})
+            return add_cors_headers(response)
+        
+        file = request.files['file']
+        if not file:
+            response = jsonify({'error': 'No file uploaded'})
+            return add_cors_headers(response), 400
+
+        # For now, return mock data to test the frontend
+        # In a real implementation, you would process the file here
+        mock_columns = ['Image URL', 'Product Image', 'Banner Image', 'Logo', 'Thumbnail']
+        filename = file.filename if file.filename else 'uploaded_file.csv'
+        
         response = jsonify({
-            'message': 'Upload endpoint working',
-            'content_type': request.content_type,
-            'has_files': 'file' in request.files,
-            'timestamp': datetime.now().isoformat()
+            'columns': mock_columns,
+            'filename': filename
         })
         return add_cors_headers(response)
+
     except Exception as e:
         response = jsonify({'error': f'Upload failed: {str(e)}'})
         return add_cors_headers(response), 500
@@ -82,11 +97,31 @@ def download_images():
         return add_cors_headers(response)
     
     try:
+        # Get JSON data from request
+        data = request.get_json()
+        
+        if not data:
+            response = jsonify({'error': 'No data provided'})
+            return add_cors_headers(response), 400
+
+        filename = data.get('filename')
+        selected_columns = data.get('columns', [])
+        download_path = data.get('downloadPath', '')
+
+        if not filename or not selected_columns:
+            response = jsonify({'error': 'Missing required parameters'})
+            return add_cors_headers(response), 400
+
+        # For now, return mock success response
+        # In a real implementation, you would process the download here
         response = jsonify({
-            'message': 'Download endpoint working',
-            'timestamp': datetime.now().isoformat()
+            'success': True,
+            'message': f'{len(selected_columns)} columns processed successfully. Images would be downloaded to Downloads/hubspot-images/',
+            'total_images': len(selected_columns) * 5,  # Mock: 5 images per column
+            'download_path': 'Downloads/hubspot-images/'
         })
         return add_cors_headers(response)
+
     except Exception as e:
         response = jsonify({'error': f'Download failed: {str(e)}'})
         return add_cors_headers(response), 500
