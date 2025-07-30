@@ -30,14 +30,19 @@ uploaded_files = {}
 
 def add_cors_headers(response):
     """Add CORS headers to response"""
-    response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
+    # Allow all Vercel preview domains
+    origin = request.headers.get('Origin', '')
+    if origin.startswith('https://hubspot-image-') and origin.endswith('.vercel.app'):
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', 'https://hubspot-image-fe.vercel.app')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     return response
 
 # Fix CORS configuration
 CORS(app, 
-     resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "https://hubspot-image-fe.vercel.app"]}},
+     resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "https://hubspot-image-fe.vercel.app", "https://*.vercel.app"]}},
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "OPTIONS"])
 
@@ -383,6 +388,12 @@ def download_images():
 @app.route('/health', methods=['GET'])
 def health_check():
     response = jsonify({'status': 'healthy', 'message': 'HubSpot Image Downloader API is running'})
+    return add_cors_headers(response)
+
+# Add a test endpoint
+@app.route('/test', methods=['GET'])
+def test():
+    response = jsonify({'message': 'Backend is working!', 'timestamp': datetime.now().isoformat()})
     return add_cors_headers(response)
 
 if __name__ == '__main__':
