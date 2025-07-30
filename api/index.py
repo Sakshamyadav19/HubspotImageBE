@@ -1,6 +1,9 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 import os
+import io
+import pandas as pd
 import json
 from datetime import datetime
 
@@ -75,13 +78,31 @@ def upload_file():
             response = jsonify({'error': 'No file uploaded'})
             return add_cors_headers(response), 400
 
-        # For now, return mock data to test the frontend
-        # In a real implementation, you would process the file here
-        mock_columns = ['Image URL', 'Product Image', 'Banner Image', 'Logo', 'Thumbnail']
-        filename = file.filename if file.filename else 'uploaded_file.csv'
-        
+        filename = secure_filename(file.filename)
+        extension = os.path.splitext(filename)[1].lower()
+
+        # Process file in memory and store it
+        file_content = file.read()
+        file_stream = io.BytesIO(file_content)
+
+        if extension == ".csv":
+            df = pd.read_csv(file_stream)
+        elif extension in [".xls", ".xlsx"]:
+            df = pd.read_excel(file_stream)
+        else:
+            response = jsonify({'error': 'Unsupported file format'})
+            return add_cors_headers(response), 400
+
+        # Store the file data for later use
+        uploaded_files[filename] = {
+            'content': file_content,
+            'extension': extension,
+            'dataframe': df
+        }
+
+        columns = df.columns.tolist()
         response = jsonify({
-            'columns': mock_columns,
+            'columns': columns,
             'filename': filename
         })
         return add_cors_headers(response)
@@ -112,12 +133,34 @@ def download_images():
             response = jsonify({'error': 'Missing required parameters'})
             return add_cors_headers(response), 400
 
-        # For now, return mock success response
-        # In a real implementation, you would process the download here
+        # Get the stored file data
+        if filename not in uploaded_files:
+            response = jsonify({'error': 'File not found. Please upload the file again.'})
+            return add_cors_headers(response), 400
+
+        file_data = uploaded_files[filename]
+        df = file_data['dataframe']
+
+        # Count total URLs in selected columns
+        total_urls = 0
+        for col in selected_columns:
+            if col in df.columns:
+                # Count non-null values in the column
+                total_urls += df[col].notna().sum()
+
+        if total_urls == 0:
+            response = jsonify({
+                'success': False,
+                'error': 'Please try different columns.',
+                'total_images': 0
+            })
+            return add_cors_headers(response), 400
+
+        # For now, return success response (actual download logic will be added later)
         response = jsonify({
             'success': True,
-            'message': f'{len(selected_columns)} columns processed successfully. Images would be downloaded to Downloads/hubspot-images/',
-            'total_images': len(selected_columns) * 5,  # Mock: 5 images per column
+            'message': f'{total_urls} image URLs found in {len(selected_columns)} columns. Images would be downloaded to Downloads/hubspot-images/',
+            'total_images': total_urls,
             'download_path': 'Downloads/hubspot-images/'
         })
         return add_cors_headers(response)
