@@ -106,6 +106,28 @@ def test():
     response = jsonify({'message': 'Backend is working!', 'timestamp': datetime.now().isoformat()})
     return add_cors_headers(response)
 
+@app.route('/test-download', methods=['GET'])
+def test_download():
+    """Test endpoint to verify download functionality"""
+    try:
+        # Create a simple test image (1x1 pixel PNG)
+        test_image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+        
+        response = jsonify({
+            'success': True,
+            'images': [{
+                'column': 'test',
+                'filename': 'test_image.png',
+                'data': test_image_data,
+                'extension': 'png',
+                'size': 95
+            }]
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        response = jsonify({'error': f'Test failed: {str(e)}'})
+        return add_cors_headers(response), 500
+
 @app.route('/test-upload', methods=['POST', 'OPTIONS'])
 def test_upload():
     if request.method == 'OPTIONS':
