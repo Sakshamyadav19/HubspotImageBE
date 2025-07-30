@@ -3,7 +3,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
 import io
-import pandas as pd
+import csv
 import json
 from datetime import datetime
 
@@ -86,21 +86,28 @@ def upload_file():
         file_stream = io.BytesIO(file_content)
 
         if extension == ".csv":
-            df = pd.read_csv(file_stream)
-        elif extension in [".xls", ".xlsx"]:
-            df = pd.read_excel(file_stream)
+            # Read CSV file and extract columns
+            file_stream.seek(0)
+            csv_reader = csv.reader(file_stream.read().decode('utf-8').splitlines())
+            rows = list(csv_reader)
+            
+            if not rows:
+                response = jsonify({'error': 'Empty CSV file'})
+                return add_cors_headers(response), 400
+                
+            columns = rows[0]  # First row contains column headers
+            
+            # Store the file data for later use
+            uploaded_files[filename] = {
+                'content': file_content,
+                'extension': extension,
+                'rows': rows,
+                'columns': columns
+            }
         else:
-            response = jsonify({'error': 'Unsupported file format'})
+            response = jsonify({'error': 'Only CSV files are supported'})
             return add_cors_headers(response), 400
 
-        # Store the file data for later use
-        uploaded_files[filename] = {
-            'content': file_content,
-            'extension': extension,
-            'dataframe': df
-        }
-
-        columns = df.columns.tolist()
         response = jsonify({
             'columns': columns,
             'filename': filename
@@ -139,14 +146,18 @@ def download_images():
             return add_cors_headers(response), 400
 
         file_data = uploaded_files[filename]
-        df = file_data['dataframe']
+        rows = file_data['rows']
+        columns = file_data['columns']
 
         # Count total URLs in selected columns
         total_urls = 0
         for col in selected_columns:
-            if col in df.columns:
-                # Count non-null values in the column
-                total_urls += df[col].notna().sum()
+            if col in columns:
+                col_index = columns.index(col)
+                # Count non-empty values in the column (skip header row)
+                for row in rows[1:]:  # Skip header row
+                    if len(row) > col_index and row[col_index].strip():
+                        total_urls += 1
 
         if total_urls == 0:
             response = jsonify({
