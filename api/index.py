@@ -107,6 +107,24 @@ def test():
     response = jsonify({'message': 'Backend is working!', 'timestamp': datetime.now().isoformat()})
     return add_cors_headers(response)
 
+@app.route('/test-upload', methods=['POST', 'OPTIONS'])
+def test_upload():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        return add_cors_headers(response)
+    
+    try:
+        response = jsonify({
+            'message': 'Test upload endpoint working',
+            'content_type': request.content_type,
+            'has_files': 'file' in request.files,
+            'timestamp': datetime.now().isoformat()
+        })
+        return add_cors_headers(response)
+    except Exception as e:
+        response = jsonify({'error': f'Test failed: {str(e)}'})
+        return add_cors_headers(response), 500
+
 @app.route('/', methods=['GET'])
 def root():
     response = jsonify({
@@ -124,6 +142,12 @@ def upload_file():
         return add_cors_headers(response)
     
     try:
+        # Check if this is a file upload or test request
+        if 'file' not in request.files:
+            # This might be a test request, return success
+            response = jsonify({'message': 'Upload endpoint ready for file uploads', 'timestamp': datetime.now().isoformat()})
+            return add_cors_headers(response)
+        
         file = request.files['file']
         if not file:
             response = jsonify({'error': 'No file uploaded'})
@@ -157,6 +181,8 @@ def upload_file():
 
     except Exception as e:
         print(f"Upload error: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         response = jsonify({'error': f'Upload failed: {str(e)}'})
         return add_cors_headers(response), 500
 
