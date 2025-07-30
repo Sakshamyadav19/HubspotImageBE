@@ -238,6 +238,10 @@ def download_images():
             response = jsonify({'error': 'File not found. Please upload the file again.'})
             return add_cors_headers(response), 400
 
+        print(f"Processing download for file: {filename}")
+        print(f"Selected columns: {selected_columns}")
+        print(f"Available files in memory: {list(uploaded_files.keys())}")
+
         file_data = uploaded_files[filename]
         rows = file_data['rows']
         columns = file_data['columns']
@@ -265,6 +269,9 @@ def download_images():
         successful_downloads = []
         errors = []
 
+        print(f"Starting image download process...")
+        print(f"Total rows to process: {len(rows) - 1}")  # Exclude header
+
         for col in selected_columns:
             if col not in columns:
                 errors.append(f"Column '{col}' not found in file")
@@ -273,18 +280,20 @@ def download_images():
             col_index = columns.index(col)
             count = 0
             
-            for row in rows[1:]:  # Skip header row
+            print(f"Processing column: {col} (index: {col_index})")
+            
+            for i, row in enumerate(rows[1:], 1):  # Skip header row
                 try:
                     if len(row) <= col_index or not row[col_index].strip():
                         continue
                         
                     signed_url = row[col_index].strip()
-                    count += 1
+                    print(f"Processing row {i}: {signed_url[:50]}...")
                     
                     # Download image data
                     image_info = download_file_from_hubspot(signed_url)
                     if image_info:
-                        filename = f"{secure_filename(col)}_{str(count).zfill(3)}.{image_info['extension']}"
+                        filename = f"{secure_filename(col)}_{str(count + 1).zfill(3)}.{image_info['extension']}"
                         
                         successful_downloads.append({
                             'column': col,
@@ -293,12 +302,16 @@ def download_images():
                             'extension': image_info['extension'],
                             'size': image_info['size']
                         })
+                        count += 1
+                        print(f"Successfully downloaded: {filename}")
                     else:
-                        count -= 1  # rollback if failed
-                        errors.append(f"Failed to download from {signed_url}")
+                        errors.append(f"Failed to download from {signed_url[:50]}...")
+                        print(f"Failed to download from row {i}")
                 except Exception as e:
-                    errors.append(f"Error processing {signed_url}: {str(e)}")
-                    count -= 1
+                    errors.append(f"Error processing row {i}: {str(e)}")
+                    print(f"Error processing row {i}: {str(e)}")
+
+        print(f"Download process complete. Successful: {len(successful_downloads)}, Errors: {len(errors)}")
 
         if successful_downloads:
             response = jsonify({
