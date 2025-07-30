@@ -314,11 +314,13 @@ def download_images():
         print(f"Download process complete. Successful: {len(successful_downloads)}, Errors: {len(errors)}")
 
         if successful_downloads:
+            # For large responses, we'll return a success message without the image data
+            # The frontend will need to handle this differently
             response = jsonify({
                 'success': True,
-                'message': f'{len(successful_downloads)} images downloaded successfully!',
+                'message': f'{len(successful_downloads)} images processed successfully!',
                 'total_images': len(successful_downloads),
-                'images': successful_downloads,  # Include image data for frontend
+                'download_ready': True,
                 'errors': errors[:10]  # Limit errors shown
             })
             return add_cors_headers(response)
@@ -332,6 +334,83 @@ def download_images():
 
     except Exception as e:
         response = jsonify({'error': f'Download failed: {str(e)}'})
+        return add_cors_headers(response), 500
+
+# Store processed images temporarily (in production, use a proper storage solution)
+processed_images = {}
+
+@app.route('/get-images', methods=['POST', 'OPTIONS'])
+def get_images():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        return add_cors_headers(response)
+    
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        column = data.get('column')
+        start_index = data.get('start_index', 0)
+        batch_size = data.get('batch_size', 10)
+        
+        if not filename or not column:
+            response = jsonify({'error': 'Missing required parameters'})
+            return add_cors_headers(response), 400
+            
+        # Get the stored file data
+        if filename not in uploaded_files:
+            response = jsonify({'error': 'File not found. Please upload the file again.'})
+            return add_cors_headers(response), 400
+
+        file_data = uploaded_files[filename]
+        rows = file_data['rows']
+        columns = file_data['columns']
+        
+        if column not in columns:
+            response = jsonify({'error': 'Column not found'})
+            return add_cors_headers(response), 400
+            
+        col_index = columns.index(column)
+        images = []
+        count = 0
+        
+        for i, row in enumerate(rows[1:], 1):  # Skip header row
+            if len(row) <= col_index or not row[col_index].strip():
+                continue
+                
+            if count < start_index:
+                count += 1
+                continue
+                
+            if len(images) >= batch_size:
+                break
+                
+            signed_url = row[col_index].strip()
+            
+            # Download image data
+            image_info = download_file_from_hubspot(signed_url)
+            if image_info:
+                filename_img = f"{secure_filename(column)}_{str(count + 1).zfill(3)}.{image_info['extension']}"
+                
+                images.append({
+                    'column': column,
+                    'filename': filename_img,
+                    'data': image_info['data'],
+                    'extension': image_info['extension'],
+                    'size': image_info['size']
+                })
+            
+            count += 1
+            
+        response = jsonify({
+            'success': True,
+            'images': images,
+            'has_more': count < len([r for r in rows[1:] if len(r) > col_index and r[col_index].strip()]),
+            'next_index': start_index + batch_size
+        })
+        return add_cors_headers(response)
+        
+    except Exception as e:
+        response = jsonify({'error': f'Failed to get images: {str(e)}'})
         return add_cors_headers(response), 500
 
 # For Vercel serverless
